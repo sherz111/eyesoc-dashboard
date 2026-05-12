@@ -1,98 +1,175 @@
 import { useState } from "react";
 
-const CVE_DB = [
-  { id: "CVE-2024-1234", software: "Apache", version: "2.4.51", severity: "Critical", score: 9.8, desc: "Remote code execution vulnerability in Apache HTTP Server allowing unauthenticated attackers to execute arbitrary code.", action: "Upgrade to Apache 2.4.52 or later immediately." },
-  { id: "CVE-2024-5678", software: "OpenSSL", version: "1.1.1", severity: "High", score: 8.1, desc: "Buffer overflow in OpenSSL allows remote attackers to cause denial of service or execute arbitrary code.", action: "Update to OpenSSL 3.0 or later. Apply vendor patches." },
-  { id: "CVE-2023-9999", software: "WordPress", version: "6.3", severity: "High", score: 7.5, desc: "SQL injection vulnerability in WordPress core allowing attackers to extract sensitive data from the database.", action: "Update to WordPress 6.4 or later. Review database permissions." },
-  { id: "CVE-2023-4444", software: "Log4j", version: "2.14", severity: "Critical", score: 10.0, desc: "Log4Shell vulnerability allowing remote code execution via JNDI injection in log messages.", action: "Upgrade to Log4j 2.17.1 or later. Block JNDI lookups at firewall." },
-  { id: "CVE-2023-3333", software: "Windows", version: "10", severity: "High", score: 8.8, desc: "Privilege escalation vulnerability in Windows 10 allowing local users to gain SYSTEM level privileges.", action: "Apply Microsoft security patch KB5028166 immediately." },
-  { id: "CVE-2023-2222", software: "PHP", version: "8.0", severity: "Medium", score: 6.5, desc: "Type confusion vulnerability in PHP allowing remote attackers to bypass security restrictions.", action: "Upgrade to PHP 8.1 or later." },
-  { id: "CVE-2022-1111", software: "MySQL", version: "8.0.26", severity: "Medium", score: 5.9, desc: "Information disclosure vulnerability in MySQL Server allowing authenticated users to access unauthorized data.", action: "Update to MySQL 8.0.27 or later." },
-  { id: "CVE-2022-7890", software: "nginx", version: "1.20", severity: "High", score: 7.8, desc: "Heap buffer overflow in nginx HTTP/2 implementation allowing remote denial of service.", action: "Upgrade to nginx 1.21 or apply vendor patch." },
-  { id: "CVE-2024-9876", software: "Chrome", version: "119", severity: "Critical", score: 9.1, desc: "Use-after-free vulnerability in Chrome V8 engine allowing remote code execution via malicious web pages.", action: "Update Chrome to version 120 or later immediately." },
-  { id: "CVE-2023-5555", software: "VMware", version: "ESXi 7.0", severity: "Critical", score: 9.8, desc: "Heap overflow vulnerability in VMware ESXi allowing guest-to-host escape and full hypervisor compromise.", action: "Apply VMware security advisory VMSA-2023-0001 patch immediately." },
-];
+interface CVEItem {
+  id: string;
+  description: string;
+  severity: string;
+  score: number;
+  vector: string;
+  published: string;
+  modified: string;
+  references: string[];
+}
 
 const severityColor = (s: string) =>
-  s === "Critical" ? "#ef4444" : s === "High" ? "#f97316" : s === "Medium" ? "#eab308" : "#22c55e";
+  s === "CRITICAL" ? "#ef4444" : s === "HIGH" ? "#f97316" : s === "MEDIUM" ? "#eab308" : s === "LOW" ? "#22c55e" : "#64748b";
 
 const severityBg = (s: string) =>
-  s === "Critical" ? "#fee2e2" : s === "High" ? "#ffedd5" : s === "Medium" ? "#fefce8" : "#dcfce7";
+  s === "CRITICAL" ? "#fee2e2" : s === "HIGH" ? "#ffedd5" : s === "MEDIUM" ? "#fefce8" : s === "LOW" ? "#dcfce7" : "#1e293b";
 
 const severityText = (s: string) =>
-  s === "Critical" ? "#b91c1c" : s === "High" ? "#c2410c" : s === "Medium" ? "#854d0e" : "#15803d";
+  s === "CRITICAL" ? "#b91c1c" : s === "HIGH" ? "#c2410c" : s === "MEDIUM" ? "#854d0e" : s === "LOW" ? "#15803d" : "#64748b";
+
+function parseCVEs(data: any): CVEItem[] {
+  if (!data?.vulnerabilities) return [];
+  return data.vulnerabilities.map((v: any) => {
+    const cve = v.cve;
+    const desc = cve.descriptions?.find((d: any) => d.lang === "en")?.value || "No description available.";
+    const metrics = cve.metrics?.cvssMetricV31?.[0] || cve.metrics?.cvssMetricV30?.[0] || cve.metrics?.cvssMetricV2?.[0];
+    const severity = metrics?.cvssData?.baseSeverity || metrics?.baseSeverity || "UNKNOWN";
+    const score = metrics?.cvssData?.baseScore || metrics?.baseScore || 0;
+    const vector = metrics?.cvssData?.vectorString || "N/A";
+    const refs = (cve.references || []).slice(0, 3).map((r: any) => r.url);
+    return {
+      id: cve.id,
+      description: desc,
+      severity: severity.toUpperCase(),
+      score,
+      vector,
+      published: cve.published?.split("T")[0] || "Unknown",
+      modified: cve.lastModified?.split("T")[0] || "Unknown",
+      references: refs,
+    };
+  });
+}
 
 export default function CVE() {
   const [search, setSearch] = useState("");
+  const [results, setResults] = useState<CVEItem[]>([]);
   const [searched, setSearched] = useState(false);
-  const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [filter, setFilter] = useState("All");
+  const [total, setTotal] = useState(0);
 
-  function handleSearch() {
+  async function fetchCVEs(query: string) {
     setLoading(true);
-    setTimeout(() => {
-      const r = CVE_DB.filter(cve =>
-        cve.id.toLowerCase().includes(search.toLowerCase()) ||
-        cve.software.toLowerCase().includes(search.toLowerCase())
-      );
-      setResults(r);
+    setError("");
+    setSearched(false);
+
+    try {
+      let url = "";
+      const trimmed = query.trim();
+
+      if (/^CVE-\d{4}-\d+$/i.test(trimmed)) {
+        url = `https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=${trimmed}`;
+      } else {
+        url = `https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=${encodeURIComponent(trimmed)}&resultsPerPage=15`;
+      }
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`NVD API returned ${res.status}`);
+      const data = await res.json();
+      const parsed = parseCVEs(data);
+      setResults(parsed);
+      setTotal(data.totalResults || parsed.length);
       setSearched(true);
+    } catch (err: any) {
+      setError("Failed to fetch from NVD. The API may be rate-limited — wait 30 seconds and try again.");
+      setResults([]);
+      setSearched(true);
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   }
 
-  function showAll() {
+  async function fetchRecent() {
     setLoading(true);
-    setTimeout(() => {
-      setResults(CVE_DB);
+    setError("");
+    setSearched(false);
+    setSearch("");
+
+    try {
+      const url = `https://services.nvd.nist.gov/rest/json/cves/2.0?resultsPerPage=15&startIndex=0`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`NVD API returned ${res.status}`);
+      const data = await res.json();
+      const parsed = parseCVEs(data);
+      setResults(parsed);
+      setTotal(data.totalResults || parsed.length);
       setSearched(true);
-      setSearch("");
+    } catch (err: any) {
+      setError("Failed to fetch from NVD. Wait 30 seconds and try again.");
+      setSearched(true);
+    } finally {
       setLoading(false);
-    }, 800);
+    }
   }
 
-  const filtered = filter === "All" ? results : results.filter(r => r.severity === filter);
+  const filtered = filter === "All" ? results : results.filter(r => r.severity === filter.toUpperCase());
 
   return (
     <div style={{ padding: "40px 24px", maxWidth: 1100, margin: "0 auto" }}>
       <div style={{ marginBottom: 32 }}>
-        <h2 style={{ fontSize: 24, fontWeight: 700, color: "#f8fafc", marginBottom: 6 }}>CVE Vulnerability Lookup</h2>
-        <p style={{ color: "#64748b", fontSize: 14 }}>Search for known vulnerabilities by software name or CVE ID and get recommended actions</p>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+          <h2 style={{ fontSize: 24, fontWeight: 700, color: "#f8fafc", margin: 0 }}>CVE Vulnerability Lookup</h2>
+          <span style={{ fontSize: 11, fontWeight: 600, background: "#1d4ed8", color: "#fff", padding: "2px 8px", borderRadius: 4 }}>LIVE — NIST NVD</span>
+        </div>
+        <p style={{ color: "#64748b", fontSize: 14, margin: 0 }}>Real-time vulnerability data powered by the NIST National Vulnerability Database</p>
       </div>
 
-      {/* Search bar */}
       <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 24, marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && handleSearch()}
-            placeholder="Search by software name (e.g. Apache, WordPress) or CVE ID..."
+            onKeyDown={e => e.key === "Enter" && search.trim() && fetchCVEs(search)}
+            placeholder="Search by software name (Apache, Log4j) or CVE ID (CVE-2021-44228)..."
             style={{ flex: 1, padding: "10px 14px", borderRadius: 7, border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0", fontSize: 13 }}
           />
-          <button onClick={handleSearch} style={{ padding: "10px 20px", borderRadius: 7, border: "none", background: "#3b82f6", color: "#fff", fontSize: 13, cursor: "pointer", fontWeight: 500 }}>
+          <button
+            onClick={() => search.trim() && fetchCVEs(search)}
+            disabled={loading || !search.trim()}
+            style={{ padding: "10px 20px", borderRadius: 7, border: "none", background: "#3b82f6", color: "#fff", fontSize: 13, cursor: "pointer", fontWeight: 500, opacity: loading || !search.trim() ? 0.6 : 1 }}>
             {loading ? "Searching..." : "Search"}
           </button>
-          <button onClick={showAll} style={{ padding: "10px 16px", borderRadius: 7, border: "1px solid #334155", background: "transparent", color: "#94a3b8", fontSize: 13, cursor: "pointer" }}>
-            Show all
+          <button
+            onClick={fetchRecent}
+            disabled={loading}
+            style={{ padding: "10px 16px", borderRadius: 7, border: "1px solid #334155", background: "transparent", color: "#94a3b8", fontSize: 13, cursor: "pointer", opacity: loading ? 0.6 : 1 }}>
+            Latest CVEs
           </button>
         </div>
+        <p style={{ fontSize: 12, color: "#475569", margin: 0 }}>
+          Data sourced live from <a href="https://nvd.nist.gov" target="_blank" rel="noreferrer" style={{ color: "#3b82f6" }}>nvd.nist.gov</a> — free public API, no key required. Rate limited to 5 requests per 30 seconds.
+        </p>
       </div>
 
-      {/* Filter */}
       {searched && results.length > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, color: "#64748b" }}>Filter:</span>
-          {["All", "Critical", "High", "Medium"].map(level => (
+          {["All", "Critical", "High", "Medium", "Low"].map(level => (
             <button key={level} onClick={() => setFilter(level)} style={{ padding: "4px 12px", borderRadius: 6, fontSize: 12, cursor: "pointer", border: filter === level ? "1px solid #3b82f6" : "1px solid #334155", background: filter === level ? "#1d4ed8" : "transparent", color: filter === level ? "#fff" : "#94a3b8" }}>{level}</button>
           ))}
-          <span style={{ fontSize: 11, color: "#475569" }}>{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>
+          <span style={{ fontSize: 11, color: "#475569" }}>
+            Showing {filtered.length} of {total.toLocaleString()} total results
+          </span>
         </div>
       )}
 
-      {/* Results */}
-      {searched && (
+      {error && (
+        <div style={{ background: "#2a0f0f", border: "1px solid #991b1b", borderRadius: 10, padding: 16, marginBottom: 16, color: "#fca5a5", fontSize: 13 }}>
+          ⚠ {error}
+        </div>
+      )}
+
+      {loading && (
+        <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 40, textAlign: "center" }}>
+          <p style={{ color: "#64748b", fontSize: 14 }}>Fetching from NIST NVD...</p>
+        </div>
+      )}
+
+      {searched && !loading && (
         filtered.length === 0 ? (
           <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 40, textAlign: "center" }}>
             <p style={{ color: "#64748b", fontSize: 14 }}>No CVEs found matching your search.</p>
@@ -102,26 +179,48 @@ export default function CVE() {
             {filtered.map(cve => (
               <div key={cve.id} style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 20 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: "#3b82f6", fontFamily: "monospace" }}>{cve.id}</span>
-                  <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 10px", borderRadius: 20, background: severityBg(cve.severity), color: severityText(cve.severity) }}>{cve.severity}</span>
-                  <span style={{ fontSize: 12, color: "#64748b" }}>CVSS Score: <span style={{ color: severityColor(cve.severity), fontWeight: 600 }}>{cve.score}</span></span>
-                  <span style={{ fontSize: 12, color: "#64748b" }}>Affects: <span style={{ color: "#f8fafc" }}>{cve.software} {cve.version}</span></span>
+                  <a href={`https://nvd.nist.gov/vuln/detail/${cve.id}`} target="_blank" rel="noreferrer"
+                    style={{ fontSize: 14, fontWeight: 600, color: "#3b82f6", fontFamily: "monospace", textDecoration: "none" }}>
+                    {cve.id}
+                  </a>
+                  <span style={{ fontSize: 12, fontWeight: 600, padding: "2px 10px", borderRadius: 20, background: severityBg(cve.severity), color: severityText(cve.severity) }}>
+                    {cve.severity}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#64748b" }}>
+                    CVSS: <span style={{ color: severityColor(cve.severity), fontWeight: 600 }}>{cve.score}</span>
+                  </span>
+                  <span style={{ fontSize: 11, color: "#475569", fontFamily: "monospace" }}>Published: {cve.published}</span>
+                  <span style={{ fontSize: 11, color: "#475569", fontFamily: "monospace" }}>Modified: {cve.modified}</span>
                 </div>
-                <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 10, lineHeight: 1.6 }}>{cve.desc}</p>
-                <div style={{ background: "#0f172a", borderRadius: 8, padding: 10, borderLeft: "3px solid #3b82f6" }}>
-                  <span style={{ fontSize: 12, color: "#64748b" }}>Recommended action: </span>
-                  <span style={{ fontSize: 12, color: "#e2e8f0" }}>{cve.action}</span>
+
+                <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 10, lineHeight: 1.6 }}>{cve.description}</p>
+
+                <div style={{ background: "#0f172a", borderRadius: 8, padding: 10, marginBottom: cve.references.length > 0 ? 10 : 0, borderLeft: "3px solid #334155" }}>
+                  <span style={{ fontSize: 11, color: "#64748b" }}>Vector: </span>
+                  <span style={{ fontSize: 11, color: "#e2e8f0", fontFamily: "monospace" }}>{cve.vector}</span>
                 </div>
+
+                {cve.references.length > 0 && (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>References:</span>
+                    {cve.references.map((ref, i) => (
+                      <a key={i} href={ref} target="_blank" rel="noreferrer"
+                        style={{ fontSize: 11, color: "#3b82f6", textDecoration: "none" }}>
+                        [{i + 1}]
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )
       )}
 
-      {!searched && (
+      {!searched && !loading && (
         <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, padding: 40, textAlign: "center" }}>
-          <p style={{ color: "#64748b", fontSize: 14, marginBottom: 8 }}>Search for a software name or click Show all to browse all CVEs</p>
-          <p style={{ color: "#475569", fontSize: 12 }}>Try searching: Apache, WordPress, Log4j, Windows, MySQL</p>
+          <p style={{ color: "#64748b", fontSize: 14, marginBottom: 8 }}>Search for a CVE ID or software name, or click Latest CVEs</p>
+          <p style={{ color: "#475569", fontSize: 12 }}>Try: CVE-2021-44228, Apache, Log4j, Windows, OpenSSL</p>
         </div>
       )}
     </div>
