@@ -1,3 +1,4 @@
+import { API_BASE } from "../apiBase";
 import { useState } from "react";
 
 interface BreachResult {
@@ -57,7 +58,8 @@ export default function DarkWeb() {
     setSearchedEmail(email.trim());
 
     try {
-      const res = await fetch(`/api/check-breach/${encodeURIComponent(email.trim())}`);
+      // ...
+      const res = await fetch(`${API_BASE}/api/check-breach/${encodeURIComponent(email.trim())}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Breach check failed");
       setResult(data);

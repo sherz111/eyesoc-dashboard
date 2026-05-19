@@ -1,3 +1,4 @@
+import { API_BASE } from "./apiBase";
 import { useMemo, useState } from "react";
 import { useThreatAnalysis } from "./hooks/useThreatAnalysis";
 import {
@@ -174,7 +175,8 @@ function App() {
     try {
       const results = await Promise.all(publicIps.map(async (ip) => {
         try {
-          const response = await fetch(`/api/check-ip/${ip}`);
+          // ...
+          const response = await fetch(`${API_BASE}/api/check-ip/${ip}`);
           const data = await response.json();
           return { ip, ok: response.ok, ...data };
         } catch { return { ip, ok: false, error: "Lookup failed" }; }
