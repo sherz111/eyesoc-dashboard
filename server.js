@@ -13,29 +13,50 @@ function isValidIp(ip) {
   return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip);
 }
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function parseBreaches(data) {
+  if (Array.isArray(data.exposures) && data.exposures.length > 0) {
+    return data.exposures;
+  }
+  if (Array.isArray(data.breaches) && data.breaches.length > 0) {
+    return data.breaches;
+  }
+  if (data.BreachesSummary && data.BreachesSummary.site) {
+    return data.BreachesSummary.site
+      .split(";")
+      .map((b) => b.trim())
+      .filter(Boolean);
+  }
+  if (typeof data === "object") {
+    const firstKey = Object.keys(data)[0];
+    if (Array.isArray(data[firstKey])) return data[firstKey];
+  }
+  return [];
+}
+
 app.get("/api/check-ip/:ip", async (req, res) => {
   try {
     const { ip } = req.params;
-    if (!isValidIp(ip)) {
-      return res.status(400).json({ error: "Invalid IP address" });
-    }
-    if (!process.env.ABUSEIPDB_API_KEY) {
-      return res.status(500).json({ error: "Missing AbuseIPDB API key" });
-    }
+    if (!isValidIp(ip)) return res.status(400).json({ error: "Invalid IP address" });
+    if (!process.env.ABUSEIPDB_API_KEY) return res.status(500).json({ error: "Missing AbuseIPDB API key" });
+
     const url = new URL("https://api.abuseipdb.com/api/v2/check");
     url.searchParams.set("ipAddress", ip);
     url.searchParams.set("maxAgeInDays", "90");
     url.searchParams.set("verbose", "true");
+
     const response = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        Key: process.env.ABUSEIPDB_API_KEY,
-      },
+      headers: { Accept: "application/json", Key: process.env.ABUSEIPDB_API_KEY },
     });
+
     if (!response.ok) {
       const errorText = await response.text();
       return res.status(response.status).json({ error: "AbuseIPDB request failed", details: errorText });
     }
+
     const json = await response.json();
     const data = json.data;
     return res.json({
@@ -53,6 +74,62 @@ app.get("/api/check-ip/:ip", async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: "Server error while checking IP reputation" });
+  }
+});
+
+app.get("/api/check-breach/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+    if (!isValidEmail(email)) return res.status(400).json({ error: "Invalid email address" });
+
+    const xonRes = await fetch(
+      `https://api.xposedornot.com/v1/check-email/${encodeURIComponent(email)}`,
+      { headers: { Accept: "application/json" } }
+    );
+
+    if (xonRes.status === 404) {
+      return res.json({ breached: false, source: "XposedOrNot", breaches: [], count: 0 });
+    }
+
+    if (!xonRes.ok) throw new Error(`XposedOrNot returned ${xonRes.status}`);
+
+    const xonData = await xonRes.json();
+    const breaches = parseBreaches(xonData);
+
+    return res.json({
+      breached: breaches.length > 0,
+      source: "XposedOrNot",
+      count: breaches.length,
+      breaches: breaches,
+    });
+
+  } catch (err) {
+    console.log("XposedOrNot failed, trying fallback:", err.message);
+    try {
+      const fallbackRes = await fetch(
+        `https://hackmyip.com/api/breach?email=${encodeURIComponent(req.params.email)}`
+      );
+      const fallbackData = await fallbackRes.json();
+
+      if (fallbackData.success) {
+        const services = (fallbackData.data.services || [])
+          .flatMap((s) => s.split(/[;,]/).map((x) => x.trim()).filter(Boolean));
+
+        return res.json({
+          breached: fallbackData.data.breaches > 0,
+          source: "HackMyIP (fallback)",
+          count: fallbackData.data.breaches,
+          breaches: services,
+          riskScore: fallbackData.data.risk?.score,
+          riskLevel: fallbackData.data.risk?.level,
+          passwords: fallbackData.data.passwords,
+        });
+      }
+
+      return res.status(500).json({ error: "All breach sources returned invalid data." });
+    } catch (fallbackErr) {
+      return res.status(500).json({ error: "All breach sources unavailable. Please try again." });
+    }
   }
 });
 
